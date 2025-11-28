@@ -1,0 +1,146 @@
+# Database Schema Reference
+
+## Connection Details
+
+```bash
+ssh -i "newkey.pem" rushy@34.197.138.31
+docker exec -it timescaledb psql -U rushy -d readings
+```
+
+---
+
+## Tables
+
+### `smartwatch_readings` (TimescaleDB Hypertable)
+
+Main table for storing smartwatch sensor data and ML predictions.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `time` | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() |
+| `heart_rate` | REAL | NOT NULL |
+| `spo2` | REAL | NOT NULL |
+| `accel_x` | REAL | |
+| `accel_y` | REAL | |
+| `accel_z` | REAL | |
+| `gyro_x` | REAL | |
+| `gyro_y` | REAL | |
+| `gyro_z` | REAL | |
+| `hr_diff` | REAL | |
+| `spo2_diff` | REAL | |
+| `stress_index` | REAL | |
+| `hr_spo2_ratio` | REAL | |
+| `accel_mag` | REAL | |
+| `gyro_mag` | REAL | |
+| `prediction` | VARCHAR(50) | |
+| `is_anomaly` | BOOLEAN | |
+| `forecasted_prediction` | VARCHAR(50) | |
+| `cluster_id` | INTEGER | |
+| `cluster_label` | VARCHAR(50) | |
+
+### `health_summaries`
+
+Long-term health summary statistics.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `summary_date` | DATE | PRIMARY KEY |
+| `avg_resting_hr` | REAL | |
+| `minutes_in_stress` | INTEGER | |
+| `minutes_exercising` | INTEGER | |
+| `total_anomalies` | INTEGER | |
+| `resting_hr_weekly_change` | REAL | |
+
+---
+
+## Views
+
+### `v_smartwatch_data_ordered`
+
+Reporting view for smartwatch data.
+
+```sql
+CREATE OR REPLACE VIEW v_smartwatch_data_ordered AS
+SELECT
+    time, heart_rate, spo2, accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z,
+    hr_diff, spo2_diff, stress_index, hr_spo2_ratio, accel_mag, gyro_mag,
+    prediction, is_anomaly, forecasted_prediction, cluster_id, cluster_label
+FROM smartwatch_readings;
+```
+
+---
+
+## Indexes
+
+### `idx_unprocessed`
+
+Index to speed up finding unprocessed rows.
+
+```sql
+CREATE INDEX idx_unprocessed ON smartwatch_readings (time DESC) 
+WHERE prediction IS NULL OR is_anomaly IS NULL;
+```
+
+---
+
+## Setup Commands
+
+```sql
+-- Create the main table with all final columns
+CREATE TABLE smartwatch_readings (
+    time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    heart_rate REAL NOT NULL,
+    spo2 REAL NOT NULL,
+    accel_x REAL,
+    accel_y REAL,
+    accel_z REAL,
+    gyro_x REAL,
+    gyro_y REAL,
+    gyro_z REAL,
+    hr_diff REAL,
+    spo2_diff REAL,
+    stress_index REAL,
+    hr_spo2_ratio REAL,
+    accel_mag REAL,
+    gyro_mag REAL,
+    prediction VARCHAR(50),
+    is_anomaly BOOLEAN,
+    forecasted_prediction VARCHAR(50),
+    cluster_id INTEGER,
+    cluster_label VARCHAR(50)
+);
+
+-- Convert the table into a TimescaleDB hypertable
+SELECT create_hypertable('smartwatch_readings', 'time');
+
+-- Create a table for long-term summaries
+CREATE TABLE health_summaries (
+    summary_date DATE PRIMARY KEY,
+    avg_resting_hr REAL,
+    minutes_in_stress INTEGER,
+    minutes_exercising INTEGER,
+    total_anomalies INTEGER,
+    resting_hr_weekly_change REAL
+);
+
+-- Create an index to speed up finding unprocessed rows
+CREATE INDEX idx_unprocessed ON smartwatch_readings (time DESC) 
+WHERE prediction IS NULL OR is_anomaly IS NULL;
+
+-- Create the final reporting view
+CREATE OR REPLACE VIEW v_smartwatch_data_ordered AS
+SELECT
+    time, heart_rate, spo2, accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z,
+    hr_diff, spo2_diff, stress_index, hr_spo2_ratio, accel_mag, gyro_mag,
+    prediction, is_anomaly, forecasted_prediction, cluster_id, cluster_label
+FROM smartwatch_readings;
+```
+
+---
+
+## Common Queries
+
+```sql
+-- View latest 10 records
+SELECT * FROM v_smartwatch_data_ordered ORDER BY time DESC LIMIT 10;
+```
