@@ -49,8 +49,8 @@ LOOKBACK_WINDOW = 30
 CLUSTERING_INTERVAL_SECONDS = 3600
 SUMMARY_INTERVAL_SECONDS = 86400
 
-# Password hashing - using argon2 as fallback, then bcrypt
-pwd_context = CryptContext(schemes=["argon2", "bcrypt"], deprecated="auto")
+# Password hashing - using bcrypt only
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer(auto_error=False)
 
 # Firebase initialization (optional)
