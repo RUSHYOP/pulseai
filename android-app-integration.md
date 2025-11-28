@@ -187,6 +187,57 @@ Authorization: Bearer <token>
 }
 ```
 
+#### Get DBSCAN Cluster Data (for Visualization)
+```http
+GET /api/v1/health/clusters?hours=24
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "clusters": [
+    {
+      "label": "Resting",
+      "cluster_id": 0,
+      "color": "#4CAF50",
+      "points": [
+        {"x": 68, "y": 98, "stress_index": 0.12, "accel_mag": 9.8, "prediction": "Normal", "time": "2025-11-28T10:00:00Z"},
+        {"x": 72, "y": 97, "stress_index": 0.15, "accel_mag": 9.9, "prediction": "Normal", "time": "2025-11-28T10:05:00Z"}
+      ]
+    },
+    {
+      "label": "Light Activity",
+      "cluster_id": 1,
+      "color": "#2196F3",
+      "points": [
+        {"x": 85, "y": 96, "stress_index": 0.25, "accel_mag": 12.5, "prediction": "Exercising", "time": "2025-11-28T11:00:00Z"}
+      ]
+    },
+    {
+      "label": "Moderate Activity",
+      "cluster_id": 2,
+      "color": "#FF9800",
+      "points": []
+    }
+  ],
+  "total_points": 150,
+  "axis_labels": {
+    "x": "Heart Rate (bpm)",
+    "y": "SpO2 (%)"
+  }
+}
+```
+
+**Cluster Colors:**
+| Cluster ID | Label | Color |
+|------------|-------|-------|
+| -1 | Noise/Undefined | #808080 (Gray) |
+| 0 | Resting | #4CAF50 (Green) |
+| 1 | Light Activity | #2196F3 (Blue) |
+| 2 | Moderate Activity | #FF9800 (Orange) |
+| 3 | Commuting | #9C27B0 (Purple) |
+
 ---
 
 ### 🔔 Alerts/Notifications Endpoints
@@ -457,8 +508,267 @@ The ML model classifies readings into these states:
 | Latest Reading | `GET /api/v1/health/latest` | Yes |
 | Health History | `GET /api/v1/health/history` | Yes |
 | Health Summary | `GET /api/v1/health/summary` | Yes |
+| **Cluster Data** | `GET /api/v1/health/clusters` | Yes |
 | Get Alerts | `GET /api/v1/alerts` | Yes |
 | Mark Alert Read | `PATCH /api/v1/alerts/{id}/read` | Yes |
 | Emergency Contacts | `GET/POST/PUT/DELETE /api/v1/emergency-contacts` | Yes |
 | Settings | `GET/PUT /api/v1/settings` | Yes |
 | WebSocket | `ws://34.197.138.31:8000/ws/{device_id}` | No |
+
+---
+
+## 📈 DBSCAN Cluster Visualization Component
+
+### Install Dependencies
+```bash
+npm install react-native-svg
+# or for Expo:
+expo install react-native-svg
+```
+
+### ClusterChart.tsx
+```typescript
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, Dimensions, ActivityIndicator } from 'react-native';
+import { Svg, Circle, G, Line, Text as SvgText } from 'react-native-svg';
+import { api } from '../services/api';
+
+interface ClusterPoint {
+  x: number;
+  y: number;
+  stress_index: number;
+  accel_mag: number;
+  prediction: string;
+  time: string;
+}
+
+interface Cluster {
+  label: string;
+  cluster_id: number;
+  color: string;
+  points: ClusterPoint[];
+}
+
+interface ClusterData {
+  clusters: Cluster[];
+  total_points: number;
+  axis_labels: { x: string; y: string };
+}
+
+const { width } = Dimensions.get('window');
+const CHART_WIDTH = width - 40;
+const CHART_HEIGHT = 300;
+const PADDING = 50;
+
+export const ClusterChart: React.FC<{ hours?: number }> = ({ hours = 24 }) => {
+  const [data, setData] = useState<ClusterData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchClusterData();
+  }, [hours]);
+
+  const fetchClusterData = async () => {
+    try {
+      setLoading(true);
+      const response = await api.get(`/api/v1/health/clusters?hours=${hours}`);
+      setData(response.data);
+      setError(null);
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch cluster data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color="#6366F1" />
+        <Text style={styles.loadingText}>Loading clusters...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return <Text style={styles.error}>{error}</Text>;
+  }
+
+  if (!data || data.clusters.length === 0 || data.total_points === 0) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.title}>Activity Clusters</Text>
+        <Text style={styles.noData}>No cluster data available yet</Text>
+      </View>
+    );
+  }
+
+  // Calculate scale from all points
+  const allPoints = data.clusters.flatMap(c => c.points);
+  const hrValues = allPoints.map(p => p.x);
+  const spo2Values = allPoints.map(p => p.y);
+  
+  const minX = Math.min(...hrValues) - 5;
+  const maxX = Math.max(...hrValues) + 5;
+  const minY = Math.min(...spo2Values) - 2;
+  const maxY = Math.max(...spo2Values) + 2;
+
+  const scaleX = (val: number) =>
+    PADDING + ((val - minX) / (maxX - minX)) * (CHART_WIDTH - PADDING * 2);
+  const scaleY = (val: number) =>
+    CHART_HEIGHT - PADDING - ((val - minY) / (maxY - minY)) * (CHART_HEIGHT - PADDING * 2);
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Activity Clusters (DBSCAN)</Text>
+      <Text style={styles.subtitle}>Heart Rate vs SpO2 - Last {hours}h</Text>
+
+      <Svg width={CHART_WIDTH} height={CHART_HEIGHT}>
+        {/* Background grid */}
+        <G>
+          {[0, 1, 2, 3, 4].map(i => {
+            const y = PADDING + (i * (CHART_HEIGHT - PADDING * 2)) / 4;
+            const x = PADDING + (i * (CHART_WIDTH - PADDING * 2)) / 4;
+            return (
+              <G key={`grid-${i}`}>
+                <Line x1={PADDING} y1={y} x2={CHART_WIDTH - PADDING} y2={y} stroke="#E5E7EB" strokeWidth={1} />
+                <Line x1={x} y1={PADDING} x2={x} y2={CHART_HEIGHT - PADDING} stroke="#E5E7EB" strokeWidth={1} />
+              </G>
+            );
+          })}
+        </G>
+
+        {/* Axis labels */}
+        <SvgText x={CHART_WIDTH / 2} y={CHART_HEIGHT - 10} fontSize={11} textAnchor="middle" fill="#6B7280">
+          {data.axis_labels.x}
+        </SvgText>
+        <SvgText x={12} y={CHART_HEIGHT / 2} fontSize={11} textAnchor="middle" fill="#6B7280" rotation="-90" origin={`12, ${CHART_HEIGHT / 2}`}>
+          {data.axis_labels.y}
+        </SvgText>
+
+        {/* Axis value labels */}
+        <SvgText x={PADDING} y={CHART_HEIGHT - 30} fontSize={9} fill="#9CA3AF">{minX.toFixed(0)}</SvgText>
+        <SvgText x={CHART_WIDTH - PADDING} y={CHART_HEIGHT - 30} fontSize={9} textAnchor="end" fill="#9CA3AF">{maxX.toFixed(0)}</SvgText>
+        <SvgText x={PADDING - 5} y={CHART_HEIGHT - PADDING} fontSize={9} textAnchor="end" fill="#9CA3AF">{minY.toFixed(0)}</SvgText>
+        <SvgText x={PADDING - 5} y={PADDING + 5} fontSize={9} textAnchor="end" fill="#9CA3AF">{maxY.toFixed(0)}</SvgText>
+
+        {/* Plot cluster points */}
+        {data.clusters.map((cluster) =>
+          cluster.points.map((point, idx) => (
+            <Circle
+              key={`${cluster.label}-${idx}`}
+              cx={scaleX(point.x)}
+              cy={scaleY(point.y)}
+              r={5}
+              fill={cluster.color}
+              opacity={0.75}
+            />
+          ))
+        )}
+      </Svg>
+
+      {/* Legend */}
+      <View style={styles.legend}>
+        {data.clusters
+          .filter(c => c.points.length > 0)
+          .map((cluster) => (
+            <View key={cluster.label} style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: cluster.color }]} />
+              <Text style={styles.legendText}>
+                {cluster.label} ({cluster.points.length})
+              </Text>
+            </View>
+          ))}
+      </View>
+
+      <Text style={styles.totalPoints}>
+        {data.total_points} data points analyzed
+      </Text>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    margin: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  centered: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 40,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginBottom: 16,
+  },
+  loadingText: {
+    marginTop: 12,
+    color: '#6B7280',
+  },
+  error: {
+    color: '#EF4444',
+    textAlign: 'center',
+    padding: 20,
+  },
+  noData: {
+    color: '#9CA3AF',
+    textAlign: 'center',
+    paddingVertical: 40,
+  },
+  legend: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 16,
+    gap: 16,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  legendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 6,
+  },
+  legendText: {
+    fontSize: 12,
+    color: '#4B5563',
+  },
+  totalPoints: {
+    marginTop: 12,
+    fontSize: 11,
+    color: '#9CA3AF',
+    textAlign: 'center',
+  },
+});
+
+export default ClusterChart;
+```
+
+### Usage in Your App
+```typescript
+import { ClusterChart } from './components/ClusterChart';
+
+// In your dashboard or analytics screen:
+<ClusterChart hours={24} />
+
+// Or for weekly view:
+<ClusterChart hours={168} />
+```

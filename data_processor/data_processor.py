@@ -548,6 +548,77 @@ def get_user_summary(user: dict = Depends(get_current_user)):
         logging.error(f"Summary generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/v1/health/clusters")
+def get_cluster_data(hours: int = 24, user: dict = Depends(get_current_user)):
+    """Get DBSCAN cluster visualization data for scatter plot"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT device_id FROM devices WHERE user_id = %s", (user["id"],))
+                device_ids = [r[0] for r in cur.fetchall()]
+                
+                if not device_ids:
+                    return {"message": "No devices registered", "clusters": [], "total_points": 0}
+                
+                placeholders = ','.join(['%s'] * len(device_ids))
+                
+                cur.execute(f"""
+                    SELECT heart_rate, spo2, stress_index, accel_mag, 
+                           cluster_id, cluster_label, prediction, time
+                    FROM smartwatch_readings 
+                    WHERE device_id IN ({placeholders})
+                    AND time >= NOW() - INTERVAL '{hours} hours'
+                    AND cluster_id IS NOT NULL
+                    ORDER BY time DESC
+                    LIMIT 1000
+                """, device_ids)
+                
+                rows = cur.fetchall()
+                
+                # Define cluster colors
+                cluster_colors = {
+                    -1: "#808080",  # Noise - Gray
+                    0: "#4CAF50",   # Resting - Green
+                    1: "#2196F3",   # Light Activity - Blue
+                    2: "#FF9800",   # Moderate Activity - Orange
+                    3: "#9C27B0",   # Commuting - Purple
+                }
+                
+                # Group by cluster for visualization
+                clusters = {}
+                for row in rows:
+                    cluster_id = row[4]
+                    cluster_label = row[5] or f"Cluster {cluster_id}"
+                    
+                    if cluster_label not in clusters:
+                        clusters[cluster_label] = {
+                            "label": cluster_label,
+                            "cluster_id": cluster_id,
+                            "points": [],
+                            "color": cluster_colors.get(cluster_id, "#607D8B")
+                        }
+                    
+                    clusters[cluster_label]["points"].append({
+                        "x": row[0],  # heart_rate
+                        "y": row[1],  # spo2
+                        "stress_index": row[2],
+                        "accel_mag": row[3],
+                        "prediction": row[6],
+                        "time": row[7].isoformat() if row[7] else None
+                    })
+                
+                return {
+                    "clusters": list(clusters.values()),
+                    "total_points": len(rows),
+                    "axis_labels": {
+                        "x": "Heart Rate (bpm)",
+                        "y": "SpO2 (%)"
+                    }
+                }
+    except Exception as e:
+        logging.error(f"Cluster data fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/summary/trends")
 def get_health_trends():
     """Legacy trends endpoint"""
