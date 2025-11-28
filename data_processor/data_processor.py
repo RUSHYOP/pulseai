@@ -49,8 +49,8 @@ LOOKBACK_WINDOW = 30
 CLUSTERING_INTERVAL_SECONDS = 3600
 SUMMARY_INTERVAL_SECONDS = 86400
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Password hashing - using argon2 as fallback, then bcrypt
+pwd_context = CryptContext(schemes=["argon2", "bcrypt"], deprecated="auto")
 security = HTTPBearer(auto_error=False)
 
 # Firebase initialization (optional)
@@ -145,27 +145,18 @@ def get_db_connection():
     return psycopg2.connect(host=DB_HOST, dbname=DB_NAME, user=DB_USER, password=DB_PASS)
 
 # --- Auth Helpers ---
-import hashlib
-import base64
-
-def _prepare_password(password: str) -> str:
-    """Pre-hash password with SHA256 to handle bcrypt's 72-byte limit safely"""
-    # Hash password with SHA256 and encode as base64 (always 44 chars, well under 72 bytes)
-    password_bytes = password.encode('utf-8')
-    sha256_hash = hashlib.sha256(password_bytes).digest()
-    return base64.b64encode(sha256_hash).decode('ascii')
-
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
-        prepared = _prepare_password(plain_password)
-        return pwd_context.verify(prepared, hashed_password)
+        # Truncate to 72 bytes for bcrypt limit
+        password = plain_password[:72]
+        return pwd_context.verify(password, hashed_password)
     except Exception as e:
         logging.error(f"Password verification error: {e}")
         return False
 
 def get_password_hash(password: str) -> str:
-    prepared = _prepare_password(password)
-    return pwd_context.hash(prepared)
+    # Truncate to 72 bytes for bcrypt limit
+    return pwd_context.hash(password[:72])
 
 def create_access_token(user_id: int, email: str) -> str:
     expire = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
