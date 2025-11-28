@@ -145,15 +145,27 @@ def get_db_connection():
     return psycopg2.connect(host=DB_HOST, dbname=DB_NAME, user=DB_USER, password=DB_PASS)
 
 # --- Auth Helpers ---
+import hashlib
+import base64
+
 def _prepare_password(password: str) -> str:
-    """Truncate password to 72 bytes (bcrypt limit) to avoid hashing errors"""
-    return password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+    """Pre-hash password with SHA256 to handle bcrypt's 72-byte limit safely"""
+    # Hash password with SHA256 and encode as base64 (always 44 chars, well under 72 bytes)
+    password_bytes = password.encode('utf-8')
+    sha256_hash = hashlib.sha256(password_bytes).digest()
+    return base64.b64encode(sha256_hash).decode('ascii')
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(_prepare_password(plain_password), hashed_password)
+    try:
+        prepared = _prepare_password(plain_password)
+        return pwd_context.verify(prepared, hashed_password)
+    except Exception as e:
+        logging.error(f"Password verification error: {e}")
+        return False
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(_prepare_password(password))
+    prepared = _prepare_password(password)
+    return pwd_context.hash(prepared)
 
 def create_access_token(user_id: int, email: str) -> str:
     expire = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
