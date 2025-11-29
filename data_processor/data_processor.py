@@ -6,6 +6,7 @@ import requests
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 import logging
@@ -83,6 +84,504 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- FastAPI App ---
+app = FastAPI(title="PulsAI Data Processing & API Service")
+
+# CORS - Allow mobile app connections
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Web Dashboard HTML ---
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PulsAI Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            padding: 20px 0 30px;
+        }
+        .header h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+        .header p { color: #8892b0; }
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            padding: 24px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .card h2 {
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+            color: #ccd6f6;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .card h2 span { font-size: 1.5rem; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+        .stat-box {
+            background: rgba(255,255,255,0.03);
+            padding: 16px;
+            border-radius: 12px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .stat-label { color: #8892b0; font-size: 0.85rem; margin-top: 4px; }
+        .chart-container { position: relative; height: 300px; }
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 16px;
+            justify-content: center;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85rem;
+            color: #8892b0;
+        }
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        .trend-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .trend-item:last-child { border-bottom: none; }
+        .trend-label { color: #8892b0; }
+        .trend-value { font-weight: 600; }
+        .trend-value.positive { color: #4ade80; }
+        .trend-value.negative { color: #f87171; }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #8892b0;
+        }
+        .refresh-btn {
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            border: none;
+            color: white;
+            padding: 10px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            margin-top: 20px;
+        }
+        .refresh-btn:hover { opacity: 0.9; }
+        .time-selector {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .time-btn {
+            background: rgba(255,255,255,0.1);
+            border: none;
+            color: #ccd6f6;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .time-btn.active {
+            background: linear-gradient(90deg, #667eea, #764ba2);
+        }
+        .full-width { grid-column: 1 / -1; }
+        @media (max-width: 768px) {
+            .dashboard { grid-template-columns: 1fr; }
+            .stats-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🫀 PulsAI Dashboard</h1>
+        <p>Real-time Health Monitoring & Analytics</p>
+    </div>
+
+    <div class="dashboard">
+        <!-- Live Stats -->
+        <div class="card">
+            <h2><span>📊</span> Current Stats</h2>
+            <div class="stats-grid" id="liveStats">
+                <div class="stat-box">
+                    <div class="stat-value" id="currentHR">--</div>
+                    <div class="stat-label">Heart Rate (bpm)</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="currentSpO2">--</div>
+                    <div class="stat-label">SpO2 (%)</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="currentPrediction">--</div>
+                    <div class="stat-label">Status</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="anomalyCount">--</div>
+                    <div class="stat-label">Anomalies (24h)</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Activity Distribution -->
+        <div class="card">
+            <h2><span>🏃</span> Activity Distribution</h2>
+            <div class="chart-container">
+                <canvas id="activityChart"></canvas>
+            </div>
+        </div>
+
+        <!-- DBSCAN Cluster Visualization -->
+        <div class="card full-width">
+            <h2><span>🔬</span> DBSCAN Cluster Analysis</h2>
+            <div class="time-selector">
+                <button class="time-btn active" onclick="loadClusters(6)">6h</button>
+                <button class="time-btn" onclick="loadClusters(24)">24h</button>
+                <button class="time-btn" onclick="loadClusters(72)">3d</button>
+                <button class="time-btn" onclick="loadClusters(168)">7d</button>
+            </div>
+            <div class="chart-container" style="height: 400px;">
+                <canvas id="clusterChart"></canvas>
+            </div>
+            <div class="legend" id="clusterLegend"></div>
+        </div>
+
+        <!-- Health Trends -->
+        <div class="card">
+            <h2><span>📈</span> Weekly Trends</h2>
+            <div id="trendsContainer">
+                <div class="loading">Loading trends...</div>
+            </div>
+        </div>
+
+        <!-- Prediction Distribution -->
+        <div class="card">
+            <h2><span>🎯</span> Health States (24h)</h2>
+            <div class="chart-container">
+                <canvas id="predictionChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div style="text-align: center; margin-top: 30px;">
+        <button class="refresh-btn" onclick="refreshAll()">🔄 Refresh All Data</button>
+    </div>
+
+    <script>
+        const API_BASE = '';
+        let clusterChart, activityChart, predictionChart;
+
+        const clusterColors = {
+            '-1': '#6b7280',
+            '0': '#4ade80',
+            '1': '#3b82f6',
+            '2': '#f97316',
+            '3': '#a855f7'
+        };
+        const clusterLabels = {
+            '-1': 'Noise',
+            '0': 'Resting',
+            '1': 'Light Activity',
+            '2': 'Moderate Activity',
+            '3': 'Commuting'
+        };
+
+        async function fetchLatest() {
+            try {
+                const res = await fetch(API_BASE + '/summary');
+                const data = await res.json();
+                
+                document.getElementById('anomalyCount').textContent = data.anomaly_count || 0;
+                document.getElementById('currentHR').textContent = data.average_resting_hr?.toFixed(0) || '--';
+                
+                // Activity chart
+                if (data.activity_distribution_percent) {
+                    updateActivityChart(data.activity_distribution_percent);
+                }
+                
+                // Prediction chart
+                if (data.state_distribution_percent) {
+                    updatePredictionChart(data.state_distribution_percent);
+                }
+            } catch (e) {
+                console.error('Failed to fetch summary:', e);
+            }
+        }
+
+        async function fetchLatestReading() {
+            try {
+                const res = await fetch(API_BASE + '/summary');
+                const data = await res.json();
+                if (data.average_resting_hr) {
+                    document.getElementById('currentHR').textContent = data.average_resting_hr.toFixed(0);
+                }
+            } catch (e) {}
+        }
+
+        async function loadClusters(hours = 24) {
+            document.querySelectorAll('.time-btn').forEach(btn => btn.classList.remove('active'));
+            event?.target?.classList.add('active');
+            
+            try {
+                const res = await fetch(API_BASE + `/api/v1/health/clusters-public?hours=${hours}`);
+                const data = await res.json();
+                
+                if (data.clusters && data.clusters.length > 0) {
+                    updateClusterChart(data);
+                }
+            } catch (e) {
+                console.error('Failed to load clusters:', e);
+            }
+        }
+
+        function updateClusterChart(data) {
+            const datasets = data.clusters.map(cluster => ({
+                label: cluster.label,
+                data: cluster.points.map(p => ({ x: p.x, y: p.y })),
+                backgroundColor: cluster.color + 'CC',
+                borderColor: cluster.color,
+                pointRadius: 6,
+                pointHoverRadius: 8
+            }));
+
+            if (clusterChart) {
+                clusterChart.data.datasets = datasets;
+                clusterChart.update();
+            } else {
+                const ctx = document.getElementById('clusterChart').getContext('2d');
+                clusterChart = new Chart(ctx, {
+                    type: 'scatter',
+                    data: { datasets },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: (ctx) => `HR: ${ctx.raw.x}, SpO2: ${ctx.raw.y}%`
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                title: { display: true, text: 'Heart Rate (bpm)', color: '#8892b0' },
+                                grid: { color: 'rgba(255,255,255,0.05)' },
+                                ticks: { color: '#8892b0' }
+                            },
+                            y: {
+                                title: { display: true, text: 'SpO2 (%)', color: '#8892b0' },
+                                grid: { color: 'rgba(255,255,255,0.05)' },
+                                ticks: { color: '#8892b0' },
+                                min: 85,
+                                max: 100
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Update legend
+            const legendHtml = data.clusters
+                .filter(c => c.points.length > 0)
+                .map(c => `<div class="legend-item"><div class="legend-dot" style="background:${c.color}"></div>${c.label} (${c.points.length})</div>`)
+                .join('');
+            document.getElementById('clusterLegend').innerHTML = legendHtml;
+        }
+
+        function updateActivityChart(distribution) {
+            const labels = Object.keys(distribution);
+            const values = Object.values(distribution);
+            const colors = ['#4ade80', '#3b82f6', '#f97316', '#a855f7', '#ec4899'];
+
+            if (activityChart) {
+                activityChart.data.labels = labels;
+                activityChart.data.datasets[0].data = values;
+                activityChart.update();
+            } else {
+                const ctx = document.getElementById('activityChart').getContext('2d');
+                activityChart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels,
+                        datasets: [{
+                            data: values,
+                            backgroundColor: colors,
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom',
+                                labels: { color: '#8892b0', padding: 15 }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        function updatePredictionChart(distribution) {
+            const labels = Object.keys(distribution);
+            const values = Object.values(distribution);
+            const colorMap = {
+                'Normal': '#4ade80',
+                'Resting': '#3b82f6',
+                'Exercising': '#f97316',
+                'Stressed': '#eab308',
+                'Tachycardia': '#ef4444',
+                'Bradycardia': '#8b5cf6',
+                'Hypoxia': '#ec4899',
+                'Arrhythmia': '#f43f5e'
+            };
+            const colors = labels.map(l => colorMap[l] || '#6b7280');
+
+            if (predictionChart) {
+                predictionChart.data.labels = labels;
+                predictionChart.data.datasets[0].data = values;
+                predictionChart.data.datasets[0].backgroundColor = colors;
+                predictionChart.update();
+            } else {
+                const ctx = document.getElementById('predictionChart').getContext('2d');
+                predictionChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels,
+                        datasets: [{
+                            data: values,
+                            backgroundColor: colors,
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        indexAxis: 'y',
+                        plugins: {
+                            legend: { display: false }
+                        },
+                        scales: {
+                            x: {
+                                grid: { color: 'rgba(255,255,255,0.05)' },
+                                ticks: { color: '#8892b0' }
+                            },
+                            y: {
+                                grid: { display: false },
+                                ticks: { color: '#ccd6f6' }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        async function loadTrends() {
+            try {
+                const res = await fetch(API_BASE + '/summary/trends');
+                const data = await res.json();
+                
+                if (data.length > 0) {
+                    const latest = data[0];
+                    const prev = data[1] || {};
+                    
+                    const html = `
+                        <div class="trend-item">
+                            <span class="trend-label">Avg Resting HR</span>
+                            <span class="trend-value">${latest.avg_resting_hr?.toFixed(1) || '--'} bpm</span>
+                        </div>
+                        <div class="trend-item">
+                            <span class="trend-label">Weekly HR Change</span>
+                            <span class="trend-value ${latest.resting_hr_weekly_change > 0 ? 'negative' : 'positive'}">
+                                ${latest.resting_hr_weekly_change > 0 ? '+' : ''}${latest.resting_hr_weekly_change?.toFixed(1) || '0'} bpm
+                            </span>
+                        </div>
+                        <div class="trend-item">
+                            <span class="trend-label">Stress Minutes</span>
+                            <span class="trend-value">${latest.minutes_in_stress || 0} min</span>
+                        </div>
+                        <div class="trend-item">
+                            <span class="trend-label">Exercise Minutes</span>
+                            <span class="trend-value positive">${latest.minutes_exercising || 0} min</span>
+                        </div>
+                        <div class="trend-item">
+                            <span class="trend-label">Total Anomalies</span>
+                            <span class="trend-value ${latest.total_anomalies > 5 ? 'negative' : ''}">${latest.total_anomalies || 0}</span>
+                        </div>
+                    `;
+                    document.getElementById('trendsContainer').innerHTML = html;
+                } else {
+                    document.getElementById('trendsContainer').innerHTML = '<p style="color:#8892b0;text-align:center;">No trend data yet</p>';
+                }
+            } catch (e) {
+                document.getElementById('trendsContainer').innerHTML = '<p style="color:#f87171;">Failed to load trends</p>';
+            }
+        }
+
+        function refreshAll() {
+            fetchLatest();
+            loadClusters(24);
+            loadTrends();
+        }
+
+        // Initial load
+        refreshAll();
+        
+        // Auto-refresh every 30 seconds
+        setInterval(refreshAll, 30000);
+    </script>
+</body>
+</html>
+"""
 
 # --- Pydantic Models ---
 class UserRegister(BaseModel):
@@ -364,6 +863,71 @@ def get_user_devices(user: dict = Depends(get_current_user)):
                     for r in rows
                 ]
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ===================== WEB DASHBOARD =====================
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/dashboard", response_class=HTMLResponse)
+def serve_dashboard():
+    """Serve the web dashboard"""
+    return DASHBOARD_HTML
+
+@app.get("/api/v1/health/clusters-public")
+def get_cluster_data_public(hours: int = 24):
+    """Get DBSCAN cluster data (public - for dashboard)"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT heart_rate, spo2, stress_index, accel_mag, 
+                           cluster_id, cluster_label, prediction, time
+                    FROM smartwatch_readings 
+                    WHERE time >= NOW() - INTERVAL '{hours} hours'
+                    AND cluster_id IS NOT NULL
+                    ORDER BY time DESC
+                    LIMIT 1000
+                """)
+                
+                rows = cur.fetchall()
+                
+                cluster_colors = {
+                    -1: "#6b7280",
+                    0: "#4ade80",
+                    1: "#3b82f6",
+                    2: "#f97316",
+                    3: "#a855f7",
+                }
+                
+                clusters = {}
+                for row in rows:
+                    cluster_id = row[4]
+                    cluster_label = row[5] or f"Cluster {cluster_id}"
+                    
+                    if cluster_label not in clusters:
+                        clusters[cluster_label] = {
+                            "label": cluster_label,
+                            "cluster_id": cluster_id,
+                            "points": [],
+                            "color": cluster_colors.get(cluster_id, "#6b7280")
+                        }
+                    
+                    clusters[cluster_label]["points"].append({
+                        "x": row[0],
+                        "y": row[1],
+                        "stress_index": row[2],
+                        "accel_mag": row[3],
+                        "prediction": row[6],
+                        "time": row[7].isoformat() if row[7] else None
+                    })
+                
+                return {
+                    "clusters": list(clusters.values()),
+                    "total_points": len(rows),
+                    "axis_labels": {"x": "Heart Rate (bpm)", "y": "SpO2 (%)"}
+                }
+    except Exception as e:
+        logging.error(f"Public cluster data fetch failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ===================== HEALTH DATA ENDPOINTS =====================
