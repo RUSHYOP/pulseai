@@ -75,13 +75,48 @@ def read_root():
             "models_loaded": [CLASSIFICATION_MODEL_PATH, ANOMALY_MODEL_PATH, FORECASTING_MODEL_PATH]}
 
 
+def _apply_motion_override(prediction_label: str, engineered_features: dict) -> str:
+    """
+    Override predictions based on motion data.
+    High motion + high HR = Exercise, not Tachycardia
+    """
+    accel_mag = engineered_features.get("accel_mag", 9.8)
+    gyro_mag = engineered_features.get("gyro_mag", 0)
+    heart_rate = engineered_features.get("heart_rate", 70)
+    
+    # High motion threshold: accel_mag > 12 or gyro_mag > 1.0 indicates physical activity
+    is_high_motion = accel_mag > 12.0 or gyro_mag > 1.0
+    
+    # If predicted Tachycardia but user is clearly moving (exercising)
+    if prediction_label == "Tachycardia" and is_high_motion and heart_rate < 180:
+        logging.info(f"🏃 Motion override: Tachycardia → Exercising (accel_mag={accel_mag:.2f}, gyro_mag={gyro_mag:.2f})")
+        return "Exercising"
+    
+    # If predicted Stressed but high motion suggests exercise
+    if prediction_label == "Stressed" and is_high_motion and heart_rate > 100:
+        logging.info(f"🏃 Motion override: Stressed → Exercising (accel_mag={accel_mag:.2f}, gyro_mag={gyro_mag:.2f})")
+        return "Exercising"
+    
+    # Very low motion + low HR at rest is normal, not fatigued
+    is_resting = accel_mag < 10.0 and gyro_mag < 0.05
+    if prediction_label == "Fatigued" and is_resting and 55 <= heart_rate <= 70:
+        logging.info(f"😴 Motion override: Fatigued → Normal (resting state)")
+        return "Normal"
+    
+    return prediction_label
+
+
 @app.post("/predict_classification")
 def predict_classification(data: RawSensorData):
     try:
         features_df, engineered_features = _engineer_features(data)
         prediction_result = classification_model.predict(features_df)
         prediction_label = LABEL_MAP.get(int(prediction_result[0]), "Unknown")
-        return {"prediction": prediction_label, "engineered_features": engineered_features}
+        
+        # Apply motion-based override logic
+        final_prediction = _apply_motion_override(prediction_label, engineered_features)
+        
+        return {"prediction": final_prediction, "engineered_features": engineered_features}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Classification error: {str(e)}")
 
